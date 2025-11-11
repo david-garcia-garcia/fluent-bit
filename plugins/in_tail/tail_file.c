@@ -69,6 +69,10 @@ static uint64_t stat_get_st_dev(struct stat *st)
 #endif
 }
 
+/*
+ * Generate a hash from device ID and inode number for file identification.
+ * Creates a hash from "device:inode" to uniquely identify files.
+ */
 static int stat_to_hash_bits(struct flb_tail_config *ctx, struct stat *st,
                              uint64_t *out_hash)
 {
@@ -852,6 +856,10 @@ static int tag_compose(char *tag, char *fname, char *out_buf, size_t *out_size,
     return 0;
 }
 
+/*
+ * Check if a file already exists in the tracking system.
+ * Uses inode numbers (via stat_to_hash_bits) to identify files.
+ */
 static inline int flb_tail_file_exists(struct stat *st,
                                        struct flb_tail_config *ctx)
 {
@@ -1287,9 +1295,42 @@ error:
         if (file->name) {
             flb_free(file->name);
         }
+        if (file->orig_name) {
+            flb_free(file->orig_name);
+        }
+        if (file->real_name) {
+            flb_free(file->real_name);
+        }
+        if (file->tag_buf) {
+            flb_free(file->tag_buf);
+        }
+        if (file->hash_key) {
+            flb_sds_destroy(file->hash_key);
+        }
+        if (file->dmode_buf) {
+            flb_sds_destroy(file->dmode_buf);
+        }
+        if (file->dmode_lastline) {
+            flb_sds_destroy(file->dmode_lastline);
+        }
+        if (file->decompression_context) {
+            flb_decompression_context_destroy(file->decompression_context);
+        }
+        if (file->sl_log_event_encoder) {
+            flb_log_event_encoder_destroy(file->sl_log_event_encoder);
+        }
+        if (file->ml_log_event_encoder) {
+            flb_log_event_encoder_destroy(file->ml_log_event_encoder);
+        }
+        if (file->config && file->config->ml_ctx && file->ml_stream_id > 0) {
+            flb_ml_stream_id_destroy_all(file->config->ml_ctx, file->ml_stream_id);
+        }
+        msgpack_sbuffer_destroy(&file->mult_sbuf);
         flb_free(file);
     }
-    close(fd);
+    if (fd != -1) {
+        close(fd);
+    }
 
     return -1;
 }
@@ -1668,7 +1709,13 @@ int flb_tail_file_chunk(struct flb_tail_file *file)
     return FLB_TAIL_ERROR;
 }
 
-/* Returns FLB_TRUE if a file has been rotated, otherwise FLB_FALSE */
+/*
+ * Returns FLB_TRUE if a file has been rotated, otherwise FLB_FALSE
+ *
+ * Rotation detection requires an open file handle to resolve the rotated file's
+ * path. When handles are closed (keep_file_handle=false), rotation detection
+ * is disabled since we cannot read from the rotated file anyway.
+ */
 int flb_tail_file_is_rotated(struct flb_tail_config *ctx,
                              struct flb_tail_file *file)
 {
@@ -1681,6 +1728,12 @@ int flb_tail_file_is_rotated(struct flb_tail_config *ctx,
      * function will trigger a rotation.
      */
     if (file->rotated != 0) {
+        return FLB_FALSE;
+    }
+
+    /* Rotation detection requires an open file handle */
+    if (file->fd == -1) {
+        /* Handle is closed: cannot detect rotation (cannot read rotated file anyway) */
         return FLB_FALSE;
     }
 
@@ -1710,7 +1763,7 @@ int flb_tail_file_is_rotated(struct flb_tail_config *ctx,
         }
     }
 
-    /* Retrieve the real file name, operating system lookup */
+    /* Handle is open: use file descriptor resolution for accurate path */
     name = flb_tail_file_name(file);
     if (!name) {
         flb_plg_error(ctx->ins,
@@ -1719,8 +1772,6 @@ int flb_tail_file_is_rotated(struct flb_tail_config *ctx,
         return -1;
     }
 
-
-    /* Get stats from the file name */
     ret = stat(name, &st);
     if (ret == -1) {
         flb_errno();
@@ -1737,7 +1788,6 @@ int flb_tail_file_is_rotated(struct flb_tail_config *ctx,
 
     flb_plg_debug(ctx->ins, "inode=%"PRIu64" rotated: %s => %s",
                   file->inode, file->name, name);
-
     flb_free(name);
     return FLB_TRUE;
 }
@@ -1793,6 +1843,15 @@ int flb_tail_file_to_event(struct flb_tail_file *file)
 /*
  * Given an open file descriptor, return the filename. This function is a
  * bit slow and it aims to be used only when a file is rotated.
+ *
+ * IMPORTANT: This function requires file->fd to be a valid open file descriptor.
+ * It uses platform-specific mechanisms (e.g., /proc/self/fd/ on Linux, F_GETPATH
+ * on macOS, GetFinalPathNameByHandleA on Windows) to resolve the actual file
+ * path from the file descriptor, which allows it to detect rotation even after
+ * a file has been renamed.
+ *
+ * When the file handle is closed, rotation detection uses inode comparison
+ * instead (see flb_tail_file_is_rotated()).
  */
 char *flb_tail_file_name(struct flb_tail_file *file)
 {
@@ -1922,7 +1981,11 @@ int flb_tail_file_rotated(struct flb_tail_file *file)
     struct stat st;
     struct flb_tail_config *ctx = file->config;
 
-    /* Get the new file name */
+    /*
+     * Get the new file name by resolving the file descriptor.
+     * NOTE: If the handle is closed, this will fail. In that case,
+     * rotation detection uses inode comparison instead (see flb_tail_file_is_rotated()).
+     */
     name = flb_tail_file_name(file);
     if (!name) {
         return -1;

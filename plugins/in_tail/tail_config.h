@@ -103,6 +103,7 @@ struct flb_tail_config {
 
     int progress_check_interval;      /* watcher interval             */
     int progress_check_interval_nsec; /* watcher interval             */
+    uint64_t fstat_interval_nsec;     /* fstat polling interval in nanoseconds */
 
 #ifdef FLB_HAVE_INOTIFY
     int   inotify_watcher;     /* enable/disable inotify monitor */
