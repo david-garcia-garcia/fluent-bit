@@ -1281,17 +1281,6 @@ int flb_tail_file_append(char *path, struct stat *st, int mode,
         file->offset = offset;
     }
 
-    if (strlen(path) >= 3 &&
-        strcasecmp(&path[strlen(path) - 3], ".gz") == 0) {
-        file->decompression_context =
-            flb_decompression_context_create(FLB_COMPRESSION_ALGORITHM_GZIP,
-                                             ctx->buf_max_size);
-
-        if (file->decompression_context == NULL) {
-            goto error;
-        }
-    }
-
     /*
      * Duplicate string into 'file' structure, the called function
      * take cares to resolve real-name of the file in case we are
@@ -1509,7 +1498,7 @@ error:
         flb_free(file);
     }
     close(fd);
-    
+
     return -1;
 }
 
