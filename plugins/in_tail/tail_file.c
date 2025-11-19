@@ -1218,15 +1218,22 @@ int flb_tail_file_append(char *path, struct stat *st, int mode,
     }
     #endif
 
+    fd = open(path, O_RDONLY);
+    if (fd == -1) {
+        flb_errno();
+        flb_plg_error(ctx->ins, "cannot open %s", path);
+        return -1;
+    }
+
     file = flb_calloc(1, sizeof(struct flb_tail_file));
     if (!file) {
         flb_errno();
-        return -1;
+        goto error;
     }
 
     /* Initialize */
     file->watch_fd  = -1;
-    file->fd        = -1;  /* Will be opened below */
+    file->fd        = fd;
 
     /* On non-windows environments check if the original path is a link */
     ret = lstat(path, &lst);
@@ -1274,29 +1281,16 @@ int flb_tail_file_append(char *path, struct stat *st, int mode,
         file->offset = offset;
     }
 
-    /*
-     * Set file->name early so flb_tail_file_ensure_open_handle() can use it.
-     * We need to set it before opening the handle.
-     */
-    file->name = flb_strdup(path);
-    if (!file->name) {
-        flb_errno();
-        goto error;
-    }
-    file->name_len = strlen(file->name);
+    if (strlen(path) >= 3 &&
+        strcasecmp(&path[strlen(path) - 3], ".gz") == 0) {
+        file->decompression_context =
+            flb_decompression_context_create(FLB_COMPRESSION_ALGORITHM_GZIP,
+                                             ctx->buf_max_size);
 
-    /* Open file handle first - flb_tail_file_name_dup() needs it open */
-    ret = flb_tail_file_ensure_open_handle(file);
-    if (ret != 0) {
-        flb_free(file->name);
-        file->name = NULL;
-        goto error;
+        if (file->decompression_context == NULL) {
+            goto error;
+        }
     }
-
-    /* Avoid leaking the temporary name; flb_tail_file_name_dup() will set it again */
-    flb_free(file->name);
-    file->name = NULL;
-    file->name_len = 0;
 
     /*
      * Duplicate string into 'file' structure, the called function
@@ -1506,9 +1500,6 @@ int flb_tail_file_append(char *path, struct stat *st, int mode,
 
 error:
     if (file) {
-        if (file->fd != -1) {
-            close(file->fd);
-        }
         if (file->buf_data) {
             flb_free(file->buf_data);
         }
@@ -1517,7 +1508,8 @@ error:
         }
         flb_free(file);
     }
-
+    close(fd);
+    
     return -1;
 }
 
