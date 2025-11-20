@@ -112,8 +112,17 @@ void flb_tail_file_close_handle(struct flb_tail_file *file)
 /* Close file handle during tail if it's open and keep_file_handle is false */
 void flb_tail_file_close_handle_during_tail(struct flb_tail_file *file)
 {
+    flb_plg_debug(file->config->ins, "close_handle_during_tail: DEBUG: entering, file=%s, keep_file_handle=%d, fd=%d", 
+                  file->name ? file->name : "unknown", file->config->keep_file_handle, file->fd);
     if (file->config->keep_file_handle == FLB_FALSE && file->fd != -1) {
+        flb_plg_debug(file->config->ins, "close_handle_during_tail: DEBUG: closing handle for %s, fd=%d", 
+                      file->name, file->fd);
         flb_tail_file_close_handle(file);
+        flb_plg_debug(file->config->ins, "close_handle_during_tail: DEBUG: handle closed, file->fd=%d", file->fd);
+    }
+    else {
+        flb_plg_debug(file->config->ins, "close_handle_during_tail: DEBUG: NOT closing (keep_file_handle=%d, fd=%d)", 
+                      file->config->keep_file_handle, file->fd);
     }
 }
 
@@ -1087,63 +1096,85 @@ static int set_file_position(struct flb_tail_config *ctx,
 {
     int64_t ret;
 
+    flb_plg_debug(ctx->ins, "set_file_position: DEBUG: entering, file=%s, fd=%d, offset=%ld, read_from_head=%d", 
+                  file->name ? file->name : "unknown", file->fd, file->offset, ctx->read_from_head);
+
 #ifdef FLB_HAVE_SQLDB
     /*
      * If the database option is enabled, try to gather the file position. The
      * database function updates the file->offset entry.
      */
     if (ctx->db) {
+        flb_plg_debug(ctx->ins, "set_file_position: DEBUG: database enabled, calling flb_tail_db_file_set");
         ret = flb_tail_db_file_set(file, ctx);
+        flb_plg_debug(ctx->ins, "set_file_position: DEBUG: flb_tail_db_file_set returned %ld, file->offset=%ld", 
+                      ret, file->offset);
         if (ret == 0) {
             if (file->offset > 0) {
+                flb_plg_debug(ctx->ins, "set_file_position: DEBUG: seeking to offset %ld, fd=%d", file->offset, file->fd);
                 ret = lseek(file->fd, file->offset, SEEK_SET);
                 if (ret == -1) {
                     flb_errno();
+                    flb_plg_debug(ctx->ins, "set_file_position: DEBUG: lseek to offset %ld FAILED, fd=%d", file->offset, file->fd);
                     return -1;
                 }
+                flb_plg_debug(ctx->ins, "set_file_position: DEBUG: lseek to offset %ld succeeded, ret=%ld", file->offset, ret);
             }
             else if (ctx->read_from_head == FLB_FALSE) {
+                flb_plg_debug(ctx->ins, "set_file_position: DEBUG: offset=0, read_from_head=false, seeking to end, fd=%d", file->fd);
                 ret = lseek(file->fd, 0, SEEK_END);
                 if (ret == -1) {
                     flb_errno();
+                    flb_plg_debug(ctx->ins, "set_file_position: DEBUG: lseek to end FAILED, fd=%d", file->fd);
                     return -1;
                 }
                 file->offset = ret;
+                flb_plg_debug(ctx->ins, "set_file_position: DEBUG: lseek to end succeeded, offset set to %ld", file->offset);
                 flb_tail_db_file_offset(file, ctx);
             }
+            flb_plg_debug(ctx->ins, "set_file_position: DEBUG: returning 0 (database path)");
             return 0;
         }
+        flb_plg_debug(ctx->ins, "set_file_position: DEBUG: database file_set returned non-zero, continuing with fallback logic");
     }
 #endif
 
     if (ctx->read_from_head == FLB_TRUE) {
         /* no need to seek, offset position is already zero */
+        flb_plg_debug(ctx->ins, "set_file_position: DEBUG: read_from_head=true, returning 0 without seek");
         return 0;
     }
 
     if (file->offset > 0) {
+        flb_plg_debug(ctx->ins, "set_file_position: DEBUG: seeking to offset %ld, fd=%d", file->offset, file->fd);
         ret = lseek(file->fd, file->offset, SEEK_SET);
 
         if (ret == -1) {
             flb_errno();
+            flb_plg_debug(ctx->ins, "set_file_position: DEBUG: lseek to offset %ld FAILED, fd=%d", file->offset, file->fd);
             return -1;
         }
+        flb_plg_debug(ctx->ins, "set_file_position: DEBUG: lseek to offset %ld succeeded, ret=%ld", file->offset, ret);
     }
     else {
+        flb_plg_debug(ctx->ins, "set_file_position: DEBUG: offset=0, seeking to end, fd=%d", file->fd);
         ret = lseek(file->fd, 0, SEEK_END);
 
         if (ret == -1) {
             flb_errno();
+            flb_plg_debug(ctx->ins, "set_file_position: DEBUG: lseek to end FAILED, fd=%d", file->fd);
             return -1;
         }
 
         file->offset = ret;
+        flb_plg_debug(ctx->ins, "set_file_position: DEBUG: lseek to end succeeded, offset set to %ld", file->offset);
     }
 
     if (file->decompression_context == NULL) {
         file->stream_offset = ret;
     }
 
+    flb_plg_debug(ctx->ins, "set_file_position: DEBUG: returning 0 (success)");
     return 0;
 }
 
@@ -1204,11 +1235,16 @@ int flb_tail_file_append(char *path, struct stat *st, int mode,
     struct stat lst;
     flb_sds_t inode_str;
 
+    flb_plg_debug(ctx->ins, "tail_append: DEBUG: entering flb_tail_file_append for %s, keep_file_handle=%d", 
+                  path, ctx->keep_file_handle);
+
     if (!S_ISREG(st->st_mode)) {
+        flb_plg_debug(ctx->ins, "tail_append: DEBUG: not a regular file, returning -1");
         return -1;
     }
 
     if (flb_tail_file_exists(st, ctx) == FLB_TRUE) {
+        flb_plg_debug(ctx->ins, "tail_append: DEBUG: file already exists, returning -1");
         return -1;
     }
 
@@ -1224,6 +1260,9 @@ int flb_tail_file_append(char *path, struct stat *st, int mode,
         flb_plg_error(ctx->ins, "cannot open %s", path);
         return -1;
     }
+
+    flb_plg_debug(ctx->ins, "tail_append: DEBUG: file opened successfully, fd=%d, keep_file_handle=%d (FLB_FALSE=%d, FLB_TRUE=%d)", 
+                  fd, ctx->keep_file_handle, FLB_FALSE, FLB_TRUE);
 
     file = flb_calloc(1, sizeof(struct flb_tail_file));
     if (!file) {
@@ -1440,19 +1479,34 @@ int flb_tail_file_append(char *path, struct stat *st, int mode,
     }
 
     /* Set the file position (database offset, head or tail) */
+    flb_plg_debug(ctx->ins, "tail_append: DEBUG: about to call set_file_position for %s, current fd=%d, offset=%ld", 
+                  file->name ? file->name : path, file->fd, file->offset);
     ret = set_file_position(ctx, file);
+    flb_plg_debug(ctx->ins, "tail_append: DEBUG: set_file_position returned %d for %s, file->offset=%ld, file->fd=%d", 
+                  ret, file->name ? file->name : path, file->offset, file->fd);
     if (ret == -1) {
+        flb_plg_debug(ctx->ins, "tail_append: DEBUG: set_file_position failed, removing file and going to error");
         flb_tail_file_remove(file);
         goto error;
     }
 
     /* Remaining bytes to read */
     file->pending_bytes = file->size - file->offset;
+    flb_plg_debug(ctx->ins, "tail_append: DEBUG: pending_bytes=%ld, size=%ld, offset=%ld", 
+                  file->pending_bytes, file->size, file->offset);
 
     /* Close file handle if keep_file_handle is false */
+    flb_plg_debug(ctx->ins, "tail_append: DEBUG: checking keep_file_handle: ctx->keep_file_handle=%d (FLB_FALSE=%d), file->fd=%d", 
+                  ctx->keep_file_handle, FLB_FALSE, file->fd);
     if (ctx->keep_file_handle == FLB_FALSE) {
         flb_plg_debug(ctx->ins, "tail_append: file will be read without keeping file handle opened %s", file->name);
+        flb_plg_debug(ctx->ins, "tail_append: DEBUG: calling flb_tail_file_close_handle_during_tail for %s, fd=%d", 
+                      file->name, file->fd);
         flb_tail_file_close_handle_during_tail(file);
+        flb_plg_debug(ctx->ins, "tail_append: DEBUG: after close_handle_during_tail, file->fd=%d", file->fd);
+    }
+    else {
+        flb_plg_debug(ctx->ins, "tail_append: DEBUG: keep_file_handle is TRUE, NOT closing handle for %s", file->name);
     }
 
 #ifdef FLB_HAVE_METRICS

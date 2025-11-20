@@ -123,6 +123,9 @@ struct flb_tail_config *flb_tail_config_create(struct flb_input_instance *ins,
         return NULL;
     }
 
+    flb_plg_debug(ins, "tail_config: DEBUG: keep_file_handle parsed as %d (FLB_FALSE=%d, FLB_TRUE=%d)", 
+                  ctx->keep_file_handle, FLB_FALSE, FLB_TRUE);
+
     /* Create the channel manager */
     ret = flb_pipe_create(ctx->ch_manager);
     if (ret == -1) {
